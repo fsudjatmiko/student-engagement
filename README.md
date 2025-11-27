@@ -1,3 +1,45 @@
-# engagementdetection
+# Student Engagement Detection
 
-This repository contains engagement detection models using customized zoom dataset (available by request). Unfortunately, the model sizes used in this repository are quite large, making it impractical to directly upload them to GitHub due to file size limitations. These models require larger storage and resources for access. You can still access and use these models through the following link: https://drive.google.com/drive/folders/17tVPjGMNK1fOEHfQxHPh9UMcBGq8Z798?usp=sharing
+A real-time student engagement detection system powered by deep learning models. This application provides live webcam analysis, video processing, model benchmarking, and TensorBoard visualization capabilities.
+
+## Features
+
+- **Live Webcam Detection** - Real-time engagement analysis with configurable webcam selection
+- **Video Processing** - Batch processing with optional performance benchmarking
+- **Model Support** - Compatible with Keras (.keras, .h5) and TensorFlow Lite (.tflite) models
+- **Benchmarking Suite** - Comprehensive model evaluation with metrics, confusion matrices, and visualizations
+- **TensorBoard Integration** - Generate and visualize performance logs from inference results
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+Run the Streamlit application:
+
+```bash
+streamlit run app.py
+```
+
+## Models
+
+The trained models are stored externally due to file size constraints.
+
+Link: https://drive.google.com/drive/folders/17tVPjGMNK1fOEHfQxHPh9UMcBGq8Z798?usp=sharing
+
+Place downloaded models in the `models/` directory.
+
+## Dataset
+
+The models are trained on a customized Zoom dataset. Access available upon request.
+
+## Requirements
+
+- Python 3.8+
+- TensorFlow 2.13+
+- OpenCV
+- Streamlit
+- Additional dependencies listed in `requirements.txt`
