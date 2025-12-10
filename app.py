@@ -263,13 +263,27 @@ st.markdown(
 with st.sidebar:
     st.markdown('<p class="sidebar-title">Configuration</p>', unsafe_allow_html=True)
     
-    # Model Selection - dynamically load from models folder
+    # Device Selection
+    st.markdown('<p class="sidebar-label">Device</p>', unsafe_allow_html=True)
+    device_option = st.selectbox(
+        "device",
+        ["CPU", "CUDA"],
+        label_visibility="collapsed"
+    )
+    
+    # Model Selection - dynamically load from models folder based on device
     st.markdown('<p class="sidebar-label">Model</p>', unsafe_allow_html=True)
     
     # Get all model files from models folder
     models_folder = "models"
     if os.path.exists(models_folder):
-        model_files = [f for f in os.listdir(models_folder) if f.endswith(('.keras', '.h5', '.tflite'))]
+        if device_option == "CUDA":
+            # Include TRT models for CUDA
+            model_files = [f for f in os.listdir(models_folder) if f.endswith(('.keras', '.h5', '.tflite', '.trt', '.engine'))]
+        else:
+            # Only CPU-compatible models
+            model_files = [f for f in os.listdir(models_folder) if f.endswith(('.keras', '.h5', '.tflite'))]
+        
         model_names = [os.path.splitext(f)[0] for f in model_files]
     else:
         model_names = []
@@ -282,7 +296,14 @@ with st.sidebar:
             label_visibility="collapsed"
         )
         selected_model_file = [f for f in model_files if f.startswith(model_option)][0]
-        model_type = 'tflite' if selected_model_file.endswith('.tflite') else 'keras'
+        
+        # Determine model type
+        if selected_model_file.endswith('.tflite'):
+            model_type = 'tflite'
+        elif selected_model_file.endswith(('.trt', '.engine')):
+            model_type = 'tensorrt'
+        else:
+            model_type = 'keras'
     else:
         st.error("No models found in the models folder!")
         model_option = None
@@ -322,11 +343,68 @@ if model_option and selected_model_file:
             interpreter.allocate_tensors()
             input_details = interpreter.get_input_details()
             output_details = interpreter.get_output_details()
-            model = None  # Set to None, we'll use interpreter instead
+            model = None
+            trt_context = None
+        elif model_type == 'tensorrt':
+            # Load TensorRT model
+            if device_option != "CUDA":
+                st.error("TensorRT models require CUDA device selection!")
+                st.stop()
+            
+            try:
+                import tensorrt as trt
+                import pycuda.driver as cuda
+                import pycuda.autoinit
+                
+                # Load TensorRT engine
+                TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+                with open(model_path, 'rb') as f:
+                    engine_data = f.read()
+                
+                runtime = trt.Runtime(TRT_LOGGER)
+                engine = runtime.deserialize_cuda_engine(engine_data)
+                trt_context = engine.create_execution_context()
+                
+                # Get input/output binding info
+                input_binding = engine.get_binding_index(engine.get_binding_name(0))
+                output_binding = engine.get_binding_index(engine.get_binding_name(1))
+                
+                # Allocate device memory
+                input_shape = engine.get_binding_shape(input_binding)
+                output_shape = engine.get_binding_shape(output_binding)
+                
+                d_input = cuda.mem_alloc(trt.volume(input_shape) * np.dtype(np.float32).itemsize)
+                d_output = cuda.mem_alloc(trt.volume(output_shape) * np.dtype(np.float32).itemsize)
+                
+                bindings = [int(d_input), int(d_output)]
+                stream = cuda.Stream()
+                
+                # Store TRT components for inference
+                trt_components = {
+                    'context': trt_context,
+                    'engine': engine,
+                    'd_input': d_input,
+                    'd_output': d_output,
+                    'bindings': bindings,
+                    'stream': stream,
+                    'input_shape': input_shape,
+                    'output_shape': output_shape
+                }
+                
+                model = None
+                interpreter = None
+                
+            except ImportError:
+                st.error("TensorRT not installed! Install with: pip install tensorrt pycuda")
+                st.stop()
+            except Exception as e:
+                st.error(f"Failed to load TensorRT model: {str(e)}")
+                st.stop()
         else:
             # Load Keras model
             model = load_model(model_path)
             interpreter = None
+            trt_context = None
 else:
     st.error("Please ensure models are available in the models folder")
     st.stop()
@@ -407,6 +485,15 @@ if input_option == "Upload Video":
                     interpreter.set_tensor(input_details[0]['index'], input_data)
                     interpreter.invoke()
                     prediction = interpreter.get_tensor(output_details[0]['index'])
+                elif model_type == 'tensorrt':
+                    import pycuda.driver as cuda
+                    input_data = np.expand_dims(preprocessed_frame, axis=0).astype(np.float32).ravel()
+                    cuda.memcpy_htod_async(trt_components['d_input'], input_data, trt_components['stream'])
+                    trt_components['context'].execute_async_v2(bindings=trt_components['bindings'], stream_handle=trt_components['stream'].handle)
+                    output = np.empty(trt_components['output_shape'], dtype=np.float32)
+                    cuda.memcpy_dtoh_async(output, trt_components['d_output'], trt_components['stream'])
+                    trt_components['stream'].synchronize()
+                    prediction = output.reshape(1, -1)
                 else:
                     prediction = model.predict(np.expand_dims(preprocessed_frame, axis=0), verbose=0)
                 
@@ -544,6 +631,15 @@ elif input_option == "Live Webcam":
                     interpreter.set_tensor(input_details[0]['index'], input_data)
                     interpreter.invoke()
                     prediction = interpreter.get_tensor(output_details[0]['index'])
+                elif model_type == 'tensorrt':
+                    import pycuda.driver as cuda
+                    input_data = np.expand_dims(preprocessed_frame, axis=0).astype(np.float32).ravel()
+                    cuda.memcpy_htod_async(trt_components['d_input'], input_data, trt_components['stream'])
+                    trt_components['context'].execute_async_v2(bindings=trt_components['bindings'], stream_handle=trt_components['stream'].handle)
+                    output = np.empty(trt_components['output_shape'], dtype=np.float32)
+                    cuda.memcpy_dtoh_async(output, trt_components['d_output'], trt_components['stream'])
+                    trt_components['stream'].synchronize()
+                    prediction = output.reshape(1, -1)
                 else:
                     prediction = model.predict(np.expand_dims(preprocessed_frame, axis=0), verbose=0)
                 
@@ -647,6 +743,15 @@ elif input_option == "Model Benchmark":
                         interpreter.set_tensor(input_details[0]['index'], input_data)
                         interpreter.invoke()
                         prediction = interpreter.get_tensor(output_details[0]['index'])
+                    elif model_type == 'tensorrt':
+                        import pycuda.driver as cuda
+                        input_data = np.expand_dims(preprocessed_frame, axis=0).astype(np.float32).ravel()
+                        cuda.memcpy_htod_async(trt_components['d_input'], input_data, trt_components['stream'])
+                        trt_components['context'].execute_async_v2(bindings=trt_components['bindings'], stream_handle=trt_components['stream'].handle)
+                        output = np.empty(trt_components['output_shape'], dtype=np.float32)
+                        cuda.memcpy_dtoh_async(output, trt_components['d_output'], trt_components['stream'])
+                        trt_components['stream'].synchronize()
+                        prediction = output.reshape(1, -1)
                     else:
                         prediction = model.predict(np.expand_dims(preprocessed_frame, axis=0), verbose=0)
                     
@@ -858,6 +963,15 @@ elif input_option == "TensorBoard":
                             interpreter.set_tensor(input_details[0]['index'], input_data)
                             interpreter.invoke()
                             prediction = interpreter.get_tensor(output_details[0]['index'])
+                        elif model_type == 'tensorrt':
+                            import pycuda.driver as cuda
+                            input_data = np.expand_dims(preprocessed_frame, axis=0).astype(np.float32).ravel()
+                            cuda.memcpy_htod_async(trt_components['d_input'], input_data, trt_components['stream'])
+                            trt_components['context'].execute_async_v2(bindings=trt_components['bindings'], stream_handle=trt_components['stream'].handle)
+                            output = np.empty(trt_components['output_shape'], dtype=np.float32)
+                            cuda.memcpy_dtoh_async(output, trt_components['d_output'], trt_components['stream'])
+                            trt_components['stream'].synchronize()
+                            prediction = output.reshape(1, -1)
                         else:
                             prediction = model.predict(np.expand_dims(preprocessed_frame, axis=0), verbose=0)
                         
@@ -891,8 +1005,8 @@ elif input_option == "TensorBoard":
                                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                 frame_tensor = tf.expand_dims(frame_rgb, 0)
                                 tf.summary.image('predictions', frame_tensor, step=frame_count)
-                    
-                    progress_bar.progress(frame_count / total_frames)
+                
+                progress_bar.progress(frame_count / total_frames)
                 
                 # Final metrics
                 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
