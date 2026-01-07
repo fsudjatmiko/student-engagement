@@ -405,13 +405,22 @@ if model_option and selected_model_file:
             model = load_model(model_path)
             interpreter = None
             trt_context = None
+        
+        st.success(f"Model loaded: {model_option}")
 else:
-    st.error("Please ensure models are available in the models folder")
-    st.stop()
+    model = None
+    interpreter = None
+    trt_context = None
 
 # Main Content
 st.title("Student Engagement Detection")
 st.markdown("### Real-time analysis system")
+
+# Show error in main area if no model is loaded
+if not model_option or not selected_model_file:
+    st.error("⚠️ No models found in the models folder!")
+    st.info("Please add model files (.keras, .h5, or .tflite) to the 'models' folder and restart the app.")
+    st.stop()
 
 st.markdown("<div style='margin-top: 3rem;'></div>", unsafe_allow_html=True)
 
@@ -1095,6 +1104,7 @@ elif input_option == "TensorBoard":
                 if st.button("Launch TensorBoard", use_container_width=True):
                     import subprocess
                     import socket
+                    import platform
                     
                     # Find available port
                     def find_free_port():
@@ -1109,8 +1119,13 @@ elif input_option == "TensorBoard":
                     # Start TensorBoard in background
                     try:
                         # Kill any existing TensorBoard process on this port
-                        subprocess.run(['taskkill', '/F', '/IM', 'tensorboard.exe'], 
-                                     stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                        if platform.system() == 'Windows':
+                            subprocess.run(['taskkill', '/F', '/IM', 'tensorboard.exe'], 
+                                         stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                        else:
+                            # For macOS/Linux, kill tensorboard processes
+                            subprocess.run(['pkill', '-f', 'tensorboard'], 
+                                         stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
                         
                         # Start new TensorBoard
                         tensorboard_process = subprocess.Popen(
